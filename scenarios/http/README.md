@@ -147,9 +147,11 @@ otel-conformance scenarios/http/go/gin/otelgin/server
 otel-conformance scenarios/http/go/gorilla-mux/otelmux/server
 otel-conformance scenarios/http/go/go-restful/otelrestful/server
 otel-conformance scenarios/http/js/express/opentelemetry-express/server
+otel-conformance scenarios/http/js/fetch/opentelemetry-browser-instrumentation/client
 otel-conformance scenarios/http/js/http/opentelemetry-http/client
 otel-conformance scenarios/http/js/http/opentelemetry-http/server
 otel-conformance scenarios/http/js/undici/opentelemetry-undici/client
+otel-conformance scenarios/http/js/xml-http-request/opentelemetry-browser-instrumentation/client
 otel-conformance scenarios/http/dotnet/aspnetcore/opentelemetry-aspnetcore/server
 otel-conformance scenarios/http/dotnet/httpclient/opentelemetry-http/client
 otel-conformance scenarios/http/python/aiohttp/opentelemetry-aiohttp-client/client

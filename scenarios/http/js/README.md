@@ -1,16 +1,22 @@
 # HTTP conformance scenarios in JavaScript
 
-Node's HTTP instrumentations, measured against
+HTTP instrumentations for Node and the browser, measured against
 [the same contract](../../../tools/http/test-client/contract.yaml) as every
 other language.
 
 ```text
 express/scenarios/                    what the server does, no OTel
 express/opentelemetry-express/        server.js, server/
+fetch/scenarios/                      what the page sends, no OTel
+fetch/opentelemetry-browser-instrumentation/
+                                      client.js, browser.js, client/
 http/scenarios/                       built-in client and server, no OTel
 http/opentelemetry-http/              client.js, server.js, client/, server/
 undici/scenarios/                     what the client does, no OTel
 undici/opentelemetry-undici/          client.js, client/
+xml-http-request/scenarios/           what the page sends, no OTel
+xml-http-request/opentelemetry-browser-instrumentation/
+                                      client.js, browser.js, client/
 ```
 
 This directory is the build root: one npm workspace, whose `package.json` and
@@ -56,6 +62,17 @@ undici does not go through Node's `http` module, so its client spans come from
 `undici.request`, which reports every status rather than throwing on 4xx and
 5xx: the contract's failing statuses are traffic to be measured like any other.
 
+## fetch and XMLHttpRequest
+
+The browser's own `fetch` and `XMLHttpRequest`, measured through the `fetch`
+and `xhr` modules of `@opentelemetry/browser-instrumentation` in headless
+Chrome. `client.js` picks the contract request in Node and hands it to the page
+in `browser.js`, which sends it to its own origin, and
+[the launcher](../../../tools/js/browser-launcher) proxies it to the mock
+server. So `url.full`, `server.address` and `server.port` name that origin
+rather than the mock server, and a header the browser controls, such as
+`User-Agent`, is the browser's.
+
 ## Running one
 
 Use Node 22.19.0 or newer. The lockfile pins `undici@8.10.0`, which requires
@@ -65,9 +82,11 @@ that version.
 pip install -e tools/runner -e tools/http/runner -e tools/http/mock-server \
   -e tools/http/test-client/python -e tools/js
 otel-conformance scenarios/http/js/express/opentelemetry-express/server
+otel-conformance scenarios/http/js/fetch/opentelemetry-browser-instrumentation/client
 otel-conformance scenarios/http/js/http/opentelemetry-http/client
 otel-conformance scenarios/http/js/http/opentelemetry-http/server
 otel-conformance scenarios/http/js/undici/opentelemetry-undici/client
+otel-conformance scenarios/http/js/xml-http-request/opentelemetry-browser-instrumentation/client
 ```
 
 Each package's `setup:` is `otel-conformance-js install`, which installs this

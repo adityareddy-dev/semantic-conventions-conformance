@@ -1,0 +1,20 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+runner: http-conformance
+instrumented_library: fetch
+instrumentation_library: "@opentelemetry/browser-instrumentation"
+scenario_contract: ../../../../../../tools/http/test-client/contract.yaml
+
+setup: otel-conformance-js install
+
+# A browser exports OTLP/HTTP only. The page posts to its own origin, which
+# relays to the runner's bridge.
+otlp_protocol: http/protobuf
+
+# The page's origin proxies every request but the page, its script and its
+# exports to this server, so what this package measures is the sending.
+server:
+  run: http-mock-server --port ${PORT}
+
+scenario_run: node ../client.js

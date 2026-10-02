@@ -1,0 +1,14 @@
+{
+  "name": "@otel-conformance/fetch-opentelemetry-browser-instrumentation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The browser's fetch measured through @opentelemetry/browser-instrumentation.",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@opentelemetry/browser-instrumentation": "0.8.1",
+    "@otel-conformance/browser-launcher": "file:../../../../../tools/js/browser-launcher",
+    "@otel-conformance/fetch-scenarios": "*",
+    "@otel-conformance/http-test-client": "file:../../../../../tools/http/test-client/js",
+    "@otel-conformance/scenario-support": "file:../../../../../tools/js/scenario-support"
+  }
+}
