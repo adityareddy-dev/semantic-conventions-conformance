@@ -8,8 +8,12 @@
  * headless Chrome the machine already has.
  *
  * The page is served from one origin that also relays its OTLP exports to the
- * endpoint the runner injected. One origin is what lets the page export
- * without CORS, which the runner's bridge does not answer.
+ * endpoint the runner injected and, when the scenario names an upstream, every
+ * other request to it. One origin is what lets the page reach both without
+ * CORS, which neither the runner's bridge nor the mock server answers.
+ *
+ * `GET /`, `GET /page.js` and any `POST` under `/v1/` are the origin's own, so
+ * a request the page sends to one of those never reaches the upstream.
  */
 
 const http = require("node:http");
@@ -31,11 +35,11 @@ function readBody(request) {
 }
 
 /**
- * Sends one export on to `endpoint`, with the Content-Length the bridge
- * requires, and notes it in `refused` when the endpoint did not accept it.
+ * Sends one request on to `base`, with the Content-Length the bridge requires,
+ * and notes it in `refused` when it failed or was an export not accepted.
  */
-function relay(endpoint, request, body, response, refused) {
-  const target = new URL(request.url, endpoint);
+function relay(base, request, body, response, refused, exporting) {
+  const target = new URL(request.url, base);
   const headers = { ...request.headers, host: target.host };
   delete headers["transfer-encoding"];
   headers["content-length"] = String(body.length);
@@ -52,7 +56,8 @@ function relay(endpoint, request, body, response, refused) {
     target,
     { method: request.method, headers },
     (answer) => {
-      if (answer.statusCode >= 400) {
+      // An upstream's 4xx and 5xx are traffic the scenario measures.
+      if (exporting && answer.statusCode >= 400) {
         refused.push(`${request.url} answered ${answer.statusCode}`);
       }
       answer.on("error", fail);
@@ -64,8 +69,8 @@ function relay(endpoint, request, body, response, refused) {
   upstream.end(body);
 }
 
-/** The page's origin: the page, its script and the OTLP relay. */
-function serve({ script, otlpEndpoint, refused = [] }) {
+/** The page's origin: the page, its script, the OTLP relay and the proxy. */
+function serve({ script, otlpEndpoint, upstream, refused = [] }) {
   const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/") {
       response.writeHead(200, { "content-type": "text/html" });
@@ -77,19 +82,22 @@ function serve({ script, otlpEndpoint, refused = [] }) {
       response.end(script);
       return;
     }
-    if (request.method === "POST" && request.url.startsWith("/v1/")) {
-      let body;
-      try {
-        body = await readBody(request);
-      } catch (error) {
-        refused.push(`${request.url} failed: ${error.message}`);
-        response.destroy();
-        return;
-      }
-      relay(otlpEndpoint, request, body, response, refused);
+    const exporting =
+      request.method === "POST" && request.url.startsWith("/v1/");
+    if (!exporting && !upstream) {
+      response.writeHead(404).end();
       return;
     }
-    response.writeHead(404).end();
+    let body;
+    try {
+      body = await readBody(request);
+    } catch (error) {
+      refused.push(`${request.url} failed: ${error.message}`);
+      response.destroy();
+      return;
+    }
+    const base = exporting ? otlpEndpoint : upstream;
+    relay(base, request, body, response, refused, exporting);
   });
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve(server));
@@ -118,10 +126,14 @@ function within(promise, millis, what) {
 }
 
 /**
- * Opens `page` (a file exposing `runScenario` through `./page`), calls it,
- * and returns once its exports have been answered.
+ * Opens `page` (a file exposing `runScenario` through `./page`), calls it
+ * with `input`, and returns once its exports have been answered. Any other
+ * request the page sends goes to `upstream`, if there is one.
+ *
+ * Answers with what the page's workload returned, or undefined when the run
+ * failed, which has already been reported and set the exit code.
  */
-async function runInBrowser({ page }) {
+async function runInBrowser({ page, upstream }, input) {
   let server;
   let browser;
   const refused = [];
@@ -132,6 +144,7 @@ async function runInBrowser({ page }) {
     server = await serve({
       script: await bundle(page),
       otlpEndpoint: requireEnv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+      upstream,
       refused,
     });
     const { chromium } = require("playwright-core");
@@ -142,15 +155,16 @@ async function runInBrowser({ page }) {
     tab.on("pageerror", (error) => console.error(error));
     await tab.goto(`http://127.0.0.1:${server.address().port}/`);
     await tab.waitForFunction(() => typeof runScenario === "function");
-    const result = await within(
-      tab.evaluate(() => globalThis.runScenario()),
+    const { result, seen } = await within(
+      tab.evaluate((value) => globalThis.runScenario(value), input),
       SCENARIO_TIMEOUT_MILLIS,
       "the page's scenario",
     );
     if (refused.length > 0) {
-      throw new Error(`exports were not accepted: ${refused.join("; ")}`);
+      throw new Error(`requests were refused: ${refused.join("; ")}`);
     }
-    console.log(JSON.stringify(result));
+    console.log(JSON.stringify(seen));
+    return result;
   } catch (error) {
     console.error(error);
     process.exitCode = 1;

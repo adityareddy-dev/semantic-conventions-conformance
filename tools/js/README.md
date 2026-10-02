@@ -69,7 +69,8 @@ runScenario({ instrumentations: [new ExpressInstrumentation()] }, () =>
 execute in a page. `index.js` is the Node half: it bundles the page with
 esbuild, serves it, and opens it in the Chrome the machine already has, through
 `playwright-core`, which downloads no browser. `page.js` is the page half: the
-logs SDK, and a `runScenario` that `index.js` calls.
+logs SDK, the web tracing SDK when a page expects spans, and a `runScenario`
+that `index.js` calls.
 
 The page exports to its own origin and `index.js` relays that to the endpoint
 the runner injected. One origin is what lets a page export at all, since the
@@ -83,6 +84,20 @@ waits for them before it flushes:
 exposeScenario(
   { instrumentations: [new ErrorsInstrumentation()], events: { exception: 2 } },
   raiseErrors,
+);
+```
+
+An HTTP client scenario sends its request from the page instead. It passes
+`runInBrowser` an `upstream`, usually the mock server, and the origin proxies
+every request but the page, its script and its exports there, so the page
+reaches it without CORS too. Its input, the contract request Node picked, is
+handed to the workload, the page names how many spans it expects, and what the
+workload answers comes back from `runInBrowser`:
+
+```js
+exposeScenario(
+  { instrumentations: [new FetchInstrumentation()], spans: 1 },
+  ({ method, path, body }) => send(method, path, body),
 );
 ```
 
