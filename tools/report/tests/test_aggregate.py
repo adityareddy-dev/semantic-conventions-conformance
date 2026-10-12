@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from conformance_report import _aggregate, build, render, signal_coverage
 from conftest import MODEL, write_target
@@ -142,6 +144,126 @@ def test_database_metadata_preserves_backend_and_instrumentation(
     assert target["label"] == "opentelemetry-javaagent"
     assert target["instrumented_library"] == "jdbc"
     assert target["instrumentation_library"] == "io.opentelemetry.javaagent"
+
+
+def configuration_target(
+    tmp_path: Path,
+    env: dict[str, str],
+    scenarios: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    directory = write_target(
+        tmp_path,
+        "demo/python/demo/opentelemetry-demo",
+        scenarios=tuple(scenarios),
+    )
+    spec_path = directory / "conformance.yaml"
+    spec = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
+    spec["env"] = env
+    for name, overrides in scenarios.items():
+        spec["scenarios"][name]["env"] = overrides
+    spec_path.write_text(
+        yaml.safe_dump(spec, sort_keys=False), encoding="utf-8"
+    )
+    (target,) = build(tmp_path)["targets"]
+    return target
+
+
+@pytest.mark.usefixtures("one_domain")
+def test_configuration_includes_instrumentation_settings(
+    tmp_path: Path,
+) -> None:
+    env = {
+        "OTEL_SEMCONV_STABILITY_OPT_IN": "database",
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
+        "OTEL_INSTRUMENTATION_RUNTIME_TELEMETRY_ENABLED": "false",
+        "OTEL_INSTRUMENTATION_EXAMPLE_ENABLED": "false",
+    }
+    target = configuration_target(tmp_path, env, {"main": {}})
+    assert target["configuration"] == {"main": env}
+    serialized = json.loads(render({"targets": [target]}))
+    assert serialized["targets"][0]["configuration"] == {"main": env}
+
+
+@pytest.mark.usefixtures("one_domain")
+def test_configuration_excludes_test_setup_and_credentials(
+    tmp_path: Path,
+) -> None:
+    env = {
+        "JDBC_PASSWORD": "package-secret",
+        "JDBC_URL": "jdbc:example",
+        "OTEL_EXPORTER_OTLP_HEADERS": "authorization=secret",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+        "OTEL_CONFIG_FILE": "test-config.yaml",
+        "OTEL_SEMCONV_STABILITY_OPT_IN_EXTRA": "not-an-opt-in",
+        "OTEL_INSTRUMENTATION": "not-a-prefixed-setting",
+    }
+    target = configuration_target(
+        tmp_path, env, {"main": {"API_KEY": "scenario-secret"}}
+    )
+    assert target["configuration"] == {"main": {}}
+    serialized = render({"configuration": target["configuration"]})
+    assert "secret" not in serialized
+
+
+@pytest.mark.usefixtures("one_domain")
+def test_configuration_merges_package_and_scenario_settings(
+    tmp_path: Path,
+) -> None:
+    opt_in = "OTEL_SEMCONV_STABILITY_OPT_IN"
+    runtime = "OTEL_INSTRUMENTATION_RUNTIME_TELEMETRY_ENABLED"
+    target = configuration_target(
+        tmp_path,
+        {opt_in: "database", runtime: "false"},
+        {
+            "overridden": {opt_in: "database/dup"},
+            "inherited": {},
+        },
+    )
+    assert target["configuration"] == {
+        "inherited": {opt_in: "database", runtime: "false"},
+        "overridden": {opt_in: "database/dup", runtime: "false"},
+    }
+
+
+@pytest.mark.usefixtures("one_domain")
+def test_configuration_does_not_capture_the_process_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opt_in = "OTEL_SEMCONV_STABILITY_OPT_IN"
+    monkeypatch.setenv(opt_in, "ambient-override")
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_EXAMPLE_ENABLED", "true")
+    target = configuration_target(
+        tmp_path, {opt_in: "${OPT_IN}"}, {"main": {}}
+    )
+    assert target["configuration"] == {"main": {opt_in: "${OPT_IN}"}}
+
+
+@pytest.mark.usefixtures("one_domain")
+def test_configuration_retains_scenarios_with_no_settings(
+    tmp_path: Path,
+) -> None:
+    target = configuration_target(tmp_path, {}, {"second": {}, "first": {}})
+    assert target["configuration"] == {"first": {}, "second": {}}
+
+
+@pytest.mark.usefixtures("one_domain")
+def test_configuration_order_does_not_depend_on_yaml_order(
+    tmp_path: Path,
+) -> None:
+    env = {
+        "OTEL_SEMCONV_STABILITY_OPT_IN": "database",
+        "OTEL_INSTRUMENTATION_EXAMPLE_ENABLED": "false",
+    }
+    scenarios = {"second": {}, "first": {}}
+    before = configuration_target(tmp_path, env, scenarios)
+    after = configuration_target(
+        tmp_path,
+        dict(reversed(list(env.items()))),
+        dict(reversed(list(scenarios.items()))),
+    )
+    assert list(before["configuration"]) == ["first", "second"]
+    assert list(before["configuration"]["first"]) == sorted(env)
+    assert render({"targets": [before]}) == render({"targets": [after]})
 
 
 def test_the_registry_slice_holds_only_what_was_referenced() -> None:

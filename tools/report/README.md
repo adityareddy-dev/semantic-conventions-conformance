@@ -55,6 +55,36 @@ Registry declarations and findings are copied through from the runner
 unchanged. `schema_version` changes when the output changes incompatibly, and
 the schema is still experimental.
 
+### Instrumentation configuration
+
+Each target's `configuration` maps scenario names to the instrumentation
+settings declared in `conformance.yaml`. Package-level `env` settings apply
+to every scenario; a scenario's own `env` overrides matching package keys.
+Only `OTEL_SEMCONV_STABILITY_OPT_IN` and keys starting with
+`OTEL_INSTRUMENTATION_` are included. Test setup, connection credentials and
+exporter settings are excluded. Scenarios with no matching settings have an
+empty object, and scenario names and setting keys are sorted.
+
+For example, a package with `OTEL_SEMCONV_STABILITY_OPT_IN: database` and a
+`statement` scenario produces:
+
+```json
+{
+  "configuration": {
+    "statement": {
+      "OTEL_SEMCONV_STABILITY_OPT_IN": "database"
+    }
+  }
+}
+```
+
+These are the merged declarations, not a capture of a past process environment.
+Ambient overrides, runner-injected values and `${NAME}` expansion are not
+recorded. Older reports may lack `configuration`; that means configuration
+metadata is unavailable, rather than that no settings were declared. This
+additive field leaves `schema_version` unchanged. It supplies report data for
+the site; displaying it in the UI is a separate change.
+
 ## How to read the numbers
 
 **There is no single conformance score.**

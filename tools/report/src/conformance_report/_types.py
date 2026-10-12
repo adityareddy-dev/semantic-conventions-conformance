@@ -48,6 +48,7 @@ class ReportTarget(TypedDict):
     instrumentation_library: str
     label: str
     scenario_classes: list[str]
+    configuration: dict[str, dict[str, str]]
     signals: list[Signal]
     # These objects pass through from the runner without reinterpretation.
     entities: dict[str, Any]

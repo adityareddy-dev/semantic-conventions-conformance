@@ -67,6 +67,20 @@ def _domains(targets: Iterable[Target]) -> dict[str, Domain]:
     return resolved
 
 
+def _configuration(target: Target) -> dict[str, dict[str, str]]:
+    """Report declared instrumentation settings for each scenario."""
+    configuration: dict[str, dict[str, str]] = {}
+    for name, scenario in sorted(target.spec.scenarios.items()):
+        env = {**target.spec.env, **scenario.env}
+        configuration[name] = {
+            key: value
+            for key, value in sorted(env.items())
+            if key == "OTEL_SEMCONV_STABILITY_OPT_IN"
+            or key.startswith("OTEL_INSTRUMENTATION_")
+        }
+    return configuration
+
+
 def _coverage(
     declared: Mapping[str, str], emitted: Iterable[str]
 ) -> dict[str, Tally]:
@@ -190,6 +204,7 @@ def build(root: Path) -> Report:
                 ),
                 "label": target.instrumentation,
                 "scenario_classes": sorted(target.spec.scenarios),
+                "configuration": _configuration(target),
                 "signals": signals,
                 "entities": data.get("entities", {}),
                 "findings": data.get("findings", []),
