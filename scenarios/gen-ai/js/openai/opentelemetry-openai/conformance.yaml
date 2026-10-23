@@ -25,6 +25,9 @@ scenarios:
   tool_calling:
     run: node tool_calling.js
 
+  automatic_tool_calling:
+    run: node automatic_tool_calling.js
+
   multimodal:
     run: node multimodal.js
 
