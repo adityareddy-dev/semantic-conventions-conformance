@@ -64,9 +64,12 @@ Fetch is a browser API, so its scenario opens a headless browser through the
 shared browser runner. The runner serves the bundled browser workload, reserves
 only its own exporter and script endpoints, and proxies every contract request
 to the mock server unchanged. Browser spans therefore retain the contract's
-exact path and query string. Its telemetry bridge accepts the browser's
-OTLP/HTTP protobuf exports and forwards them to the runner's OTLP/gRPC
-collector; the exporter endpoint is ignored by Fetch instrumentation.
+exact path and query string. The scenario declares `otlp_protocol: http/protobuf`.
+The browser runner relays same-origin OTLP/HTTP exports to the injected
+`OTEL_EXPORTER_OTLP_ENDPOINT`, leaving protobuf-to-gRPC forwarding in the
+conformance runner's existing bridge. Export requests are ignored by Fetch
+instrumentation. The relay also supports logs and metrics for browser-event
+scenarios. Rejected exports fail the run, and waits have explicit deadlines.
 
 The browser runner first launches an installed Google Chrome and falls back to
 Playwright-managed Chromium. Install that fallback once in the build root when
@@ -103,3 +106,7 @@ The helper's own unit tests and the formatter run from here:
 npm --prefix scenarios/http/js test
 npm --prefix scenarios/http/js run format:check
 ```
+
+Node `http`, `undici`, and browser Fetch use the same browser-safe response
+checks. A wrong status, invalid JSON, or a body outside the shared contract
+fails the scenario and names the request.

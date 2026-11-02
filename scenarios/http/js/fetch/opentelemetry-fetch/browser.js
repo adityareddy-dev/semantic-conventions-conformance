@@ -16,42 +16,7 @@ const {
 } = require("@opentelemetry/sdk-trace-web");
 const { drive } = require("@otel-conformance/fetch-scenarios");
 
-/** Resolves once exactly `expected` Fetch spans have reached the exporter. */
-function trackingExporter(exporter, expected) {
-  let exported = 0;
-  let resolve;
-  let reject;
-  const complete = new Promise((onResolve, onReject) => {
-    resolve = onResolve;
-    reject = onReject;
-  });
-  return {
-    export(spans, callback) {
-      exporter.export(spans, (result) => {
-        callback(result);
-        if (result.code !== 0) {
-          reject(result.error || new Error("OTLP export failed"));
-          return;
-        }
-        exported += spans.length;
-        if (exported === expected) {
-          resolve();
-        } else if (exported > expected) {
-          reject(new Error(`exported ${exported} spans, expected ${expected}`));
-        }
-      });
-    },
-    forceFlush() {
-      return exporter.forceFlush();
-    },
-    shutdown() {
-      return exporter.shutdown();
-    },
-    waitForExpectedSpans() {
-      return complete;
-    },
-  };
-}
+const { trackingExporter } = require("./tracking-exporter");
 
 async function run() {
   const { baseUrl, exchanges, traceExporterUrl } = window.__otelConformance;

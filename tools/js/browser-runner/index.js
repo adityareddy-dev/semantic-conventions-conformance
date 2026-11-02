@@ -3,125 +3,147 @@
 
 "use strict";
 
-/**
- * Starts a browser workload and forwards its OTLP/HTTP protobuf exports to
- * the conformance runner's OTLP/gRPC collector.
- *
- * A browser cannot speak OTLP/gRPC directly. The bridge gives its bundled
- * page a same-origin OTLP/HTTP endpoint, then carries the protobuf request
- * unchanged over gRPC. Every path except the bridge's own endpoints proxies
- * unchanged to the runner's mock server, so Fetch observes the contract's
- * exact paths without a cross-origin preflight.
- */
-
+/** Serves a browser workload, its OTLP relay, and the HTTP contract proxy. */
 const http = require("node:http");
-const { URL } = require("node:url");
-
-const grpc = require("@grpc/grpc-js");
+const https = require("node:https");
 const { chromium } = require("@playwright/test");
 const esbuild = require("esbuild");
 
-const TRACE_EXPORT_PATH =
-  "/opentelemetry.proto.collector.trace.v1.TraceService/Export";
 const BRIDGE_PATH = "/_otel-conformance";
-
-function requireEnv(name) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`required environment variable is missing: ${name}`);
-  }
-  return value;
-}
+const SCENARIO_TIMEOUT_MILLIS = 30_000;
 
 function requireUrl(name) {
-  const value = requireEnv(name);
   try {
-    const url = new URL(value);
-    if (!url.host) {
-      throw new Error("URL must include a host");
-    }
+    const url = new URL(process.env[name]);
+    if (!["http:", "https:"].includes(url.protocol))
+      throw new Error("expected HTTP or HTTPS");
     return url;
   } catch (error) {
-    throw new Error(`required environment variable is not a URL: ${name}`, {
-      cause: error,
-    });
+    throw new Error(
+      `required environment variable is not an HTTP URL: ${name}`,
+      { cause: error },
+    );
   }
 }
 
-function grpcTraceClient(endpoint) {
-  const address = endpoint.host;
-  const TraceService = grpc.makeGenericClientConstructor(
-    {
-      export: {
-        path: TRACE_EXPORT_PATH,
-        requestStream: false,
-        responseStream: false,
-        requestSerialize: (value) => value,
-        requestDeserialize: (value) => value,
-        responseSerialize: (value) => value,
-        responseDeserialize: (value) => value,
-      },
-    },
-    "TraceService",
-  );
-  return new TraceService(address, grpc.credentials.createInsecure());
+async function read(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  return Buffer.concat(chunks);
 }
 
-function forward(client, payload) {
-  return new Promise((resolve, reject) => {
-    client.export(payload, (error) => (error ? reject(error) : resolve()));
-  });
-}
-
-function read(request) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    request.on("data", (chunk) => chunks.push(chunk));
-    request.on("end", () => resolve(Buffer.concat(chunks)));
-    request.on("error", reject);
-  });
-}
-
-function proxy(request, response, mockServer) {
-  const target = new URL(request.url, mockServer);
-  const upstream = http.request(target, {
+function proxy(request, response, target, { body, refused, timeoutMillis }) {
+  const headers = { ...request.headers, host: target.host };
+  if (body !== undefined) {
+    delete headers["transfer-encoding"];
+    headers["content-length"] = String(body.length);
+  }
+  const fail = (error) => {
+    refused?.push(`${request.url} failed: ${error.message}`);
+    if (response.headersSent) response.destroy();
+    else {
+      response.writeHead(502, { "content-type": "text/plain" });
+      response.end(error.message);
+    }
+  };
+  const transport = target.protocol === "https:" ? https : http;
+  const upstream = transport.request(target, {
     method: request.method,
-    headers: { ...request.headers, host: target.host },
+    headers,
   });
-  upstream.on("response", (upstreamResponse) => {
-    response.writeHead(upstreamResponse.statusCode, upstreamResponse.headers);
-    upstreamResponse.pipe(response);
-  });
-  upstream.on("error", (error) => {
-    response.writeHead(502, { "content-type": "text/plain" });
-    response.end(error.message);
-  });
-  request.pipe(upstream);
-}
-
-function listen(server) {
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve(server.address().port);
-    });
-  });
-}
-
-function close(server) {
-  server.closeAllConnections?.();
-  return new Promise((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
+  upstream.setTimeout(timeoutMillis, () =>
+    upstream.destroy(new Error("upstream request timed out")),
   );
+  upstream.on("response", (answer) => {
+    if (answer.statusCode < 200 || answer.statusCode >= 300)
+      refused?.push(`${request.url} answered ${answer.statusCode}`);
+    answer.on("error", fail);
+    response.writeHead(answer.statusCode, answer.headers);
+    answer.pipe(response);
+  });
+  upstream.on("error", fail);
+  response.on("close", () => upstream.destroy());
+  if (body === undefined) request.pipe(upstream);
+  else upstream.end(body);
+}
+
+/** The runner's HTTP bridge owns protobuf-to-gRPC forwarding. */
+async function serve({
+  script,
+  otlpEndpoint,
+  mockServer,
+  exchanges = [],
+  refused = [],
+  timeoutMillis = SCENARIO_TIMEOUT_MILLIS,
+}) {
+  let baseUrl;
+  const server = http.createServer(async (request, response) => {
+    try {
+      if (request.method === "GET" && request.url === "/") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(
+          `<!doctype html><link rel="icon" href="data:,"><script src="${BRIDGE_PATH}/scenario.js"></script>`,
+        );
+      } else if (
+        request.method === "GET" &&
+        request.url === `${BRIDGE_PATH}/scenario.js`
+      ) {
+        response.writeHead(200, {
+          "content-type": "text/javascript; charset=utf-8",
+        });
+        response.end(
+          `window.__otelConformance = ${JSON.stringify({
+            baseUrl,
+            traceExporterUrl: `${baseUrl}${BRIDGE_PATH}/v1/traces`,
+            logExporterUrl: `${baseUrl}${BRIDGE_PATH}/v1/logs`,
+            metricExporterUrl: `${baseUrl}${BRIDGE_PATH}/v1/metrics`,
+            exchanges,
+          })};\n${script}`,
+        );
+      } else if (
+        request.method === "POST" &&
+        [
+          `${BRIDGE_PATH}/v1/traces`,
+          `${BRIDGE_PATH}/v1/logs`,
+          `${BRIDGE_PATH}/v1/metrics`,
+        ].includes(request.url)
+      ) {
+        proxy(
+          request,
+          response,
+          new URL(request.url.slice(BRIDGE_PATH.length), otlpEndpoint),
+          { body: await read(request), refused, timeoutMillis },
+        );
+      } else if (mockServer) {
+        proxy(request, response, new URL(request.url, mockServer), {
+          timeoutMillis,
+        });
+      } else response.writeHead(404).end();
+    } catch (error) {
+      refused.push(`${request.url} failed: ${error.message}`);
+      response.destroy(error);
+    }
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  baseUrl = `http://127.0.0.1:${server.address().port}`;
+  return server;
 }
 
 /** Prefer a locally installed Chrome, then Playwright's managed Chromium. */
 async function launchBrowser(browserType = chromium) {
   try {
     return await browserType.launch({ channel: "chrome", headless: true });
-  } catch {
-    return browserType.launch({ headless: true });
+  } catch (chromeError) {
+    try {
+      return await browserType.launch({ headless: true });
+    } catch (error) {
+      throw new Error("could not launch Chrome or Chromium", {
+        cause: new AggregateError([chromeError, error]),
+      });
+    }
   }
 }
 
@@ -137,83 +159,78 @@ async function bundle(entrypoint) {
   return result.outputFiles[0].text;
 }
 
-/** Runs one bundled browser workload against the shared HTTP contract. */
-async function runBrowserScenario({ entrypoint, exchanges }) {
-  const mockServer = requireUrl("MOCK_SERVER_URL");
-  const collectorEndpoint = requireUrl("OTEL_EXPORTER_OTLP_ENDPOINT");
-  const collector = grpcTraceClient(collectorEndpoint);
+function within(promise, millis) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `browser scenario timed out after ${millis} ms before completion`,
+          ),
+        ),
+      millis,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Runs a bundled workload and rejects even exports the page silently ignores. */
+async function runBrowserScenario({
+  entrypoint,
+  exchanges = [],
+  timeoutMillis = SCENARIO_TIMEOUT_MILLIS,
+}) {
+  if (process.env.OTEL_EXPORTER_OTLP_PROTOCOL !== "http/protobuf")
+    throw new Error(
+      "a browser exports OTLP/HTTP: declare otlp_protocol: http/protobuf",
+    );
+  const mockServer = exchanges.length
+    ? requireUrl("MOCK_SERVER_URL")
+    : undefined;
+  const otlpEndpoint = requireUrl("OTEL_EXPORTER_OTLP_ENDPOINT");
+  const refused = [];
   let server;
   let browser;
   try {
-    const script = await bundle(entrypoint);
-    let bridgeUrl;
-    server = http.createServer(async (request, response) => {
-      try {
-        if (request.method === "GET" && request.url === "/") {
-          response.writeHead(200, {
-            "content-type": "text/html; charset=utf-8",
-          });
-          response.end(
-            `<!doctype html><link rel="icon" href="data:,"><script src="${BRIDGE_PATH}/scenario.js"></script>`,
-          );
-          return;
-        }
-        if (
-          request.method === "GET" &&
-          request.url === `${BRIDGE_PATH}/scenario.js`
-        ) {
-          response.writeHead(200, {
-            "content-type": "text/javascript; charset=utf-8",
-          });
-          response.end(
-            `window.__otelConformance = ${JSON.stringify({
-              baseUrl: bridgeUrl,
-              traceExporterUrl: `${bridgeUrl}${BRIDGE_PATH}/v1/traces`,
-              exchanges,
-            })};\n${script}`,
-          );
-          return;
-        }
-        if (
-          request.method === "POST" &&
-          request.url === `${BRIDGE_PATH}/v1/traces`
-        ) {
-          await forward(collector, await read(request));
-          response.writeHead(200);
-          response.end();
-          return;
-        }
-        proxy(request, response, mockServer);
-      } catch (error) {
-        response.writeHead(500, { "content-type": "text/plain" });
-        response.end(error instanceof Error ? error.stack : String(error));
-      }
+    server = await serve({
+      script: await bundle(entrypoint),
+      otlpEndpoint,
+      mockServer,
+      exchanges,
+      refused,
+      timeoutMillis,
     });
-    const port = await listen(server);
-    bridgeUrl = `http://127.0.0.1:${port}`;
     browser = await launchBrowser();
     const page = await browser.newPage();
-    await page.goto(bridgeUrl);
-    await page.waitForFunction(
-      () => window.__otelConformanceResult !== undefined,
+    const pageError = new Promise((_, reject) => page.on("pageerror", reject));
+    page.on("console", (message) =>
+      console.error(`[browser ${message.type()}] ${message.text()}`),
     );
-    const result = await page.evaluate(() => window.__otelConformanceResult);
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
+    const workload = async () => {
+      await page.goto(`http://127.0.0.1:${server.address().port}/`, {
+        timeout: timeoutMillis,
+      });
+      await page.waitForFunction(
+        () => window.__otelConformanceResult !== undefined,
+        null,
+        { timeout: timeoutMillis },
+      );
+      return page.evaluate(() => window.__otelConformanceResult);
+    };
+    const result = await within(
+      Promise.race([workload(), pageError]),
+      timeoutMillis,
+    );
+    if (refused.length)
+      throw new Error(`exports were not accepted: ${refused.join("; ")}`);
+    if (!result.ok) throw new Error(result.error);
   } finally {
-    try {
-      await browser?.close();
-    } finally {
-      try {
-        if (server?.listening) {
-          await close(server);
-        }
-      } finally {
-        collector.close();
-      }
-    }
+    server?.closeAllConnections();
+    if (server?.listening)
+      await new Promise((resolve) => server.close(resolve));
+    await browser?.close();
   }
 }
 
-module.exports = { launchBrowser, runBrowserScenario };
+module.exports = { launchBrowser, runBrowserScenario, serve };

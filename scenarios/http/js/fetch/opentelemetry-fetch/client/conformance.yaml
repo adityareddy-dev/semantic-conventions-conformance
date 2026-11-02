@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 runner: http-conformance
+otlp_protocol: http/protobuf
 instrumented_library: fetch
 instrumentation_library: "@opentelemetry/instrumentation-fetch"
 scenario_contract: ../../../../../../tools/http/test-client/contract.yaml

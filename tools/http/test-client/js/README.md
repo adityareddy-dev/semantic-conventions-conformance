@@ -2,13 +2,14 @@
 
 Shared [contract](../README.md) support for Node and browser scenarios. Node
 scenarios use the request sender and server response helpers; browser scenarios
-use the order-independent JSON comparison through the `json-equal` export.
+use the same status and JSON checks through the browser-safe `response` export.
 
 ```text
 src/contract.js         reads contract.yaml
 src/server-workload.js  answers one concrete request
 src/client-workload.js  sends and checks one selected request
 src/json-equal.js       compares parsed JSON without object key ordering
+src/response.js         checks status and JSON, renders response bodies
 ```
 
 The only dependency is the YAML parser used before the measured request.

@@ -9,7 +9,6 @@
     "test": "node test/index.test.js"
   },
   "dependencies": {
-    "@grpc/grpc-js": "1.14.4",
     "@playwright/test": "1.62.1",
     "esbuild": "0.28.2"
   }

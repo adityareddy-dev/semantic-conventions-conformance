@@ -10,23 +10,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { URL } = require("node:url");
 
-const grpc = require("@grpc/grpc-js");
 const { respond } = require("@otel-conformance/http-test-client");
-
-const TRACE_EXPORT_PATH =
-  "/opentelemetry.proto.collector.trace.v1.TraceService/Export";
-
-const service = {
-  export: {
-    path: TRACE_EXPORT_PATH,
-    requestStream: false,
-    responseStream: false,
-    requestSerialize: (value) => value,
-    requestDeserialize: (value) => value,
-    responseSerialize: (value) => value,
-    responseDeserialize: (value) => value,
-  },
-};
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -35,16 +19,6 @@ function listen(server) {
 function close(server) {
   server.closeAllConnections?.();
   return new Promise((resolve) => server.close(resolve));
-}
-
-function bind(server) {
-  return new Promise((resolve, reject) => {
-    server.bindAsync(
-      "127.0.0.1:0",
-      grpc.ServerCredentials.createInsecure(),
-      (error, port) => (error ? reject(error) : resolve(port)),
-    );
-  });
 }
 
 function run(environment) {
@@ -173,25 +147,27 @@ test("measures only the selected browser Fetch request", async () => {
   await listen(mock);
 
   const exports = [];
-  const collector = new grpc.Server();
-  collector.addService(service, {
-    export(call, callback) {
-      exports.push(call.request);
-      callback(null, Buffer.alloc(0));
-    },
+  const collector = http.createServer(async (request, response) => {
+    assert.equal(request.url, "/v1/traces");
+    assert.equal(request.headers["transfer-encoding"], undefined);
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    exports.push(Buffer.concat(chunks));
+    response.end();
   });
-  const collectorPort = await bind(collector);
-  collector.start();
+  await listen(collector);
+  const collectorPort = collector.address().port;
 
   try {
     await run({
       MOCK_SERVER_URL: `http://127.0.0.1:${mock.address().port}`,
       OTEL_CONFORMANCE_SCENARIO_INDEX: "2",
+      OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
       OTEL_EXPORTER_OTLP_ENDPOINT: `http://127.0.0.1:${collectorPort}`,
     });
   } finally {
     await close(mock);
-    collector.forceShutdown();
+    await close(collector);
   }
   const spans = exports.flatMap(decodeSpans);
   assert.equal(spans.length, 1, "the exporter request must not create a span");
@@ -215,5 +191,56 @@ test("measures only the selected browser Fetch request", async () => {
         status: 201,
       },
     ],
+  );
+});
+
+const { trackingExporter } = require("../tracking-exporter");
+
+test("missing Fetch spans name the expected and exported counts", async () => {
+  const exporter = trackingExporter(
+    {
+      export(_, callback) {
+        callback({ code: 0 });
+      },
+    },
+    2,
+    10,
+  );
+  exporter.export([{}], () => {});
+  await assert.rejects(
+    exporter.waitForExpectedSpans(),
+    /expected 2, exported 1/,
+  );
+});
+
+test("export failures reject the span wait", async () => {
+  const failure = new Error("collector refused the export");
+  const exporter = trackingExporter(
+    {
+      export(_, callback) {
+        callback({ code: 1, error: failure });
+      },
+    },
+    1,
+    10,
+  );
+  exporter.export([{}], () => {});
+  await assert.rejects(exporter.waitForExpectedSpans(), failure);
+});
+
+test("excess Fetch spans fail the scenario", async () => {
+  const exporter = trackingExporter(
+    {
+      export(_, callback) {
+        callback({ code: 0 });
+      },
+    },
+    1,
+    10,
+  );
+  exporter.export([{}, {}], () => {});
+  await assert.rejects(
+    exporter.waitForExpectedSpans(),
+    /exported 2 spans, expected 1/,
   );
 });

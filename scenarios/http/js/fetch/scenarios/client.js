@@ -4,8 +4,9 @@
 "use strict";
 
 const {
-  isJsonEqual,
-} = require("@otel-conformance/http-test-client/json-equal");
+  CONTENT_TYPE,
+  verify,
+} = require("@otel-conformance/http-test-client/response");
 
 /** Sends the shared exchanges with browser Fetch, without telemetry setup. */
 
@@ -16,25 +17,11 @@ async function drive(baseUrl, exchanges) {
     }
     const response = await fetch(`${baseUrl}${exchange.path}`, {
       method: exchange.method,
-      headers:
-        exchange.body === null ? {} : { "content-type": "application/json" },
+      headers: exchange.body === null ? {} : { "content-type": CONTENT_TYPE },
       body: exchange.body,
     });
     const body = await response.text();
-    if (response.status !== exchange.status) {
-      throw new Error(
-        `${exchange.method} ${exchange.path} answered ${response.status}, expected ${exchange.status}`,
-      );
-    }
-    const expected = exchange.responseBody.replace(
-      "${requestBody}",
-      () => exchange.body ?? "{}",
-    );
-    if (!isJsonEqual(JSON.parse(body), JSON.parse(expected))) {
-      throw new Error(
-        `${exchange.method} ${exchange.path} answered outside the contract`,
-      );
-    }
+    verify(exchange, { status: response.status, body });
   }
 }
 
