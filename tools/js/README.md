@@ -16,11 +16,11 @@ tools/js/tests/             the launcher's tests
 ## A build root per domain
 
 A domain's Node scenarios are one npm workspace, rooted at its own
-`scenarios/<domain>/js` — today only
-[`scenarios/http/js`](../../scenarios/http/js). `otel-conformance-js` finds it
-by searching upwards from the scenario directory for `package-lock.json`, so a
-scenario file says nothing about how deep it is nested. Within a build,
-packages are grouped by the library they instrument, so
+`scenarios/<domain>/js`, today [`scenarios/http/js`](../../scenarios/http/js)
+and [`scenarios/browser/js`](../../scenarios/browser/js). `otel-conformance-js`
+finds it by searching upwards from the scenario directory for
+`package-lock.json`, so a scenario file says nothing about how deep it is
+nested. Within a build, packages are grouped by the library they instrument, so
 `express/opentelemetry-express` sits beside the Express workload it launches.
 
 The packages here are shared by depending on them by path, which npm installs

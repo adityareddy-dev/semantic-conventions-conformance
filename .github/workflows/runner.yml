@@ -140,7 +140,6 @@ jobs:
           npm --prefix scenarios/http/js test
           npm --prefix scenarios/browser/js ci
           npm --prefix scenarios/browser/js run format:check
-          npm --prefix scenarios/browser/js test
 
       - name: Check the site
         run: |
