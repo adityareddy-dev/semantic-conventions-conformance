@@ -3,14 +3,17 @@
 
 """The coverage model: what a registry declares, per signal and entity.
 
-Weaver resolves a registry into one JSON file. Span refinements keep their own
-ids, so a classifier can select a provider-specific definition without
+Weaver resolves a registry into one JSON file. Span and metric refinements
+keep their own ids, so a classifier can select a provider-specific definition without
 counting its attributes as coverage of the base signal::
 
     {"spans":    {"http.server": {"kind": "server", "attributes": {name: level}}},
      "events":   {name: {"attributes": {name: level}}},
      "metrics":  {name: {"attributes": {name: level}}},
      "entities": {name: {"identity": {name: level}, "description": {name: level}}}}
+
+A metric refinement also records its wire ``name``, while retaining its own
+id as the mapping key. A shared wire name alone does not select a refinement.
 
 That is what a reduction reads to say which of a signal's declared attributes
 a run actually carried.

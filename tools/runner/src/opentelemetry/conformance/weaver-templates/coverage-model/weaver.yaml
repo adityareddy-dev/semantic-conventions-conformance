@@ -6,8 +6,8 @@
 # the levels are for readers of the model, since a missing required attribute
 # is a weaver violation rather than a coverage gap.
 #
-# Span refinements keep their own ids. A classifier can select the most
-# specific applicable definition without attributing its fields to the base
+# Span and metric refinements keep their own ids. A classifier can select
+# the applicable definition without attributing its fields to the base
 # signal.
 templates:
   - template: "coverage-model.json.j2"
@@ -45,9 +45,10 @@ templates:
           key: .name,
           value: {attributes: attributes},
         }) | from_entries),
-        metrics: ([.refinements.metrics[]? | select(.id == .name)] | map({
-          key: .name,
-          value: {attributes: attributes},
+        metrics: ([.refinements.metrics[]?] | map({
+          key: .id,
+          value: ({attributes: attributes}
+            + if .id == .name then {} else {name: .name} end),
         }) | from_entries),
         enums: enums,
         entities: ([.refinements.entities[]? | select(.id == .type)] | map({

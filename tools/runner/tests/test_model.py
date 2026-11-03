@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from opentelemetry.conformance import _model
+from opentelemetry.conformance._report import Observed
+from opentelemetry.conformance._semconv import _reduce
 
 
 def test_resolution_invokes_weaver_without_a_shell(
@@ -48,3 +51,80 @@ def test_resolution_invokes_weaver_without_a_shell(
         "coverage-model",
     ]
     assert not Path(commands[0][-1]).exists()
+
+
+def test_metric_refinements_keep_their_own_ids_and_wire_name(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("weaver") is None:
+        pytest.skip("weaver is not installed")
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    (registry / "metrics.yaml").write_text(
+        """file_format: definition/2
+attributes:
+  - key: example.base
+    type: string
+    brief: Base attribute.
+    stability: development
+  - key: example.provider
+    type: string
+    brief: Provider attribute.
+    stability: development
+metrics:
+  - name: example.duration
+    brief: Duration.
+    stability: development
+    requirement_level: recommended
+    instrument: histogram
+    unit: s
+    attributes:
+      - ref: example.base
+        requirement_level: required
+metric_refinements:
+  - id: provider.example.duration
+    ref: example.duration
+    brief: Provider duration.
+    stability: development
+    attributes:
+      - ref: example.provider
+        requirement_level: recommended
+  - id: other.example.duration
+    ref: example.duration
+    brief: Other duration.
+    stability: development
+    attributes:
+      - ref: example.provider
+        requirement_level: opt_in
+""",
+        encoding="utf-8",
+    )
+    model = _model.load(_model.resolve(registry, tmp_path / "model.json"))
+    metrics = model["metrics"]
+
+    assert metrics == {
+        "example.duration": {"attributes": {"example.base": "required"}},
+        "provider.example.duration": {
+            "name": "example.duration",
+            "attributes": {
+                "example.base": "required",
+                "example.provider": "recommended",
+            },
+        },
+        "other.example.duration": {
+            "name": "example.duration",
+            "attributes": {
+                "example.base": "required",
+                "example.provider": "opt_in",
+            },
+        },
+    }
+
+    # A shared wire name does not establish which refinement applies.
+    data = _reduce(
+        Observed(
+            metrics={"example.duration": {"example.base", "example.provider"}}
+        ),
+        model,
+    )
+    assert data["metrics"] == {"example.duration": ["example.base"]}
