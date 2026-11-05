@@ -44,7 +44,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest pyyaml flask grpcio opentelemetry-proto testcontainers opentelemetry-sdk
-          python -m pip install --no-deps -e tools/runner -e tools/database/runner -e tools/gen-ai/mock-server -e tools/gen-ai/runner -e tools/http/runner -e tools/http/mock-server -e tools/http/test-client/python -e tools/python -e tools/java -e tools/js -e tools/ruby -e tools/dotnet -e tools/php -e tools/go -e tools/report
+          python -m pip install --no-deps -e tools/runner -e tools/database/runner -e tools/gen-ai/mock-server -e tools/gen-ai/runner -e tools/browser/runner -e tools/http/runner -e tools/http/mock-server -e tools/http/test-client/python -e tools/python -e tools/java -e tools/js -e tools/ruby -e tools/dotnet -e tools/php -e tools/go -e tools/report
 
       - name: Set up Java for Redis connection tests
         if: runner.os == 'Linux'
@@ -77,7 +77,7 @@ jobs:
       # The report tests run here, not with the nightly rebuild: they never
       # resolve a coverage model, so they do not need weaver.
       - name: Test
-        run: python -m pytest --junitxml=runner-tests.xml tools/runner/tests tools/database/runner/tests tools/gen-ai/mock-server/tests tools/http/runner/tests tools/http/test-client/python/tests tools/java/tests tools/js/tests tools/ruby/tests tools/dotnet/tests tools/php/tests tools/go/tests tools/python/tests tools/report/tests
+        run: python -m pytest --junitxml=runner-tests.xml tools/runner/tests tools/database/runner/tests tools/gen-ai/mock-server/tests tools/browser/runner/tests tools/http/runner/tests tools/http/test-client/python/tests tools/java/tests tools/js/tests tools/ruby/tests tools/dotnet/tests tools/php/tests tools/go/tests tools/python/tests tools/report/tests
 
       - name: Require Redis connection coverage
         if: runner.os == 'Linux'
@@ -293,6 +293,7 @@ jobs:
             -e tools/database/runner \
             -e tools/gen-ai/mock-server \
             -e tools/gen-ai/runner \
+            -e tools/browser/runner \
             -e tools/http/runner \
             -e tools/http/mock-server \
             -e tools/http/test-client/python \
@@ -356,6 +357,7 @@ jobs:
             -e tools/gen-ai/runner \
             -e tools/http/test-client/python \
             -e tools/http/mock-server \
+            -e tools/browser/runner \
             -e tools/http/runner
 
       # Separate step: the tests below skip when a model won't resolve, which
@@ -364,6 +366,7 @@ jobs:
         run: |
           python -c 'from database_conformance import DOMAIN; DOMAIN.coverage_model'
           python -c 'from genai_conformance import DOMAIN; DOMAIN.coverage_model'
+          python -c 'from browser_conformance import DOMAIN; DOMAIN.coverage_model'
           python -c 'from http_conformance import DOMAIN; DOMAIN.coverage_model'
 
       - name: Test the coverage models and Weaver lifecycle
@@ -373,6 +376,7 @@ jobs:
             tools/runner/tests/test_weaver.py \
             tools/database/runner/tests \
             tools/gen-ai/runner/tests \
+            tools/browser/runner/tests \
             tools/http/runner/tests
 
   discover-scenarios:
@@ -685,6 +689,7 @@ jobs:
             -e tools/gen-ai/mock-server \
             -e tools/gen-ai/runner \
             -e tools/http/mock-server \
+            -e tools/browser/runner \
             -e tools/http/runner \
             -e tools/http/test-client/python \
             -e tools/python \
